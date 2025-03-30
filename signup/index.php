@@ -4,12 +4,18 @@ session_start();
 include '../config.php';
 $query = new Database();
 
+// Generate CSRF token if it doesn't exist
+if (!isset($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+
 if (isset($_SESSION['loggedin']) && $_SESSION['loggedin'] === true) {
     if ($_SESSION['role'] == 'admin') {
         header("Location: ../admin/");
         exit;
     } else if ($_SESSION['role'] == 'seller') {
         header("Location: ../seller/");
+        exit;
     } else {
         header("Location: ../");
         exit;
@@ -41,6 +47,7 @@ if (isset($_COOKIE['username']) && isset($_COOKIE['session_token'])) {
             exit;
         } else if ($user['role'] == 'seller') {
             header("Location: ../seller/");
+            exit;
         } else {
             header("Location: ../");
             exit;
@@ -51,60 +58,83 @@ if (isset($_COOKIE['username']) && isset($_COOKIE['session_token'])) {
 $msg = [];
 
 if (isset($_POST['submit'])) {
-    $name = $_POST['name'];
-    $number = $_POST['number'];
-    $role = $_POST['role'];
-    $email = $_POST['email'];
-    $username = $_POST['username'];
-    $password = $_POST['password'];
-
-    $existingUser = $query->executeQueryWithParams(
-        "SELECT * FROM accounts WHERE username = ? OR email = ? OR number = ?",
-        [$username, $email, $number]
-    );
-
-    if ($existingUser->num_rows > 0) {
+    // Verify CSRF token
+    if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
         $msg = [
             "title" => "Error!",
-            "text" => "Username, email, or phone number already exists."
+            "text" => "Invalid form submission."
         ];
     } else {
-        $result = $query->registerUser($name, $number, $email, $username, $password, $role);
-        $userData = $query->executeQueryWithParams("SELECT * FROM accounts WHERE username = ?", [$username])->fetch_assoc();
-
-        if (!empty($result) && !empty($userData) && isset($userData['id'])) {
-            $_SESSION['loggedin'] = true;
-            $_SESSION['id'] = $userData['id'];
-            $_SESSION['name'] = $name;
-            $_SESSION['number'] = $number;
-            $_SESSION['email'] = $email;
-            $_SESSION['username'] = $username;
-            $_SESSION['role'] = $role;
-
-            setcookie('username', $username, time() + (86400 * 30), "/", "", true, true);
-            setcookie('session_token',  session_id(), time() + (86400 * 30), "/", "", true, true);
-
-            $msg = [
-                "title" => "Success!",
-                "text" => "Registration completed!",
-                "icon" => "success"
-            ];
-
-            if ($role === 'admin') {
-                header("Location: ../admin/");
-                exit;
-            } else if ($role === 'seller') {
-                header("Location: ../seller/");
-                exit;
-            } else {
-                header("Location: ../");
-                exit;
-            }
-        } else {
+        $name = $_POST['name'];
+        $number = $_POST['number'];
+        $role = $_POST['role'];
+        
+        // Restrict role to only 'user' and 'seller'
+        if ($role !== 'user' && $role !== 'seller') {
+            $role = 'user'; // Default to user if invalid role
+        }
+        
+        $email = $_POST['email'];
+        $username = $_POST['username'];
+        $password = $_POST['password'];
+        $confirm_password = $_POST['confirm_password'];
+        
+        // Check if passwords match
+        if ($password !== $confirm_password) {
             $msg = [
                 "title" => "Error!",
-                "text" => "An error occurred while saving the data."
+                "text" => "Passwords do not match."
             ];
+        } else {
+            $existingUser = $query->executeQueryWithParams(
+                "SELECT * FROM accounts WHERE username = ? OR email = ? OR number = ?",
+                [$username, $email, $number]
+            );
+
+            if ($existingUser->num_rows > 0) {
+                $msg = [
+                    "title" => "Error!",
+                    "text" => "Username, email, or phone number already exists."
+                ];
+            } else {
+                $result = $query->registerUser($name, $number, $email, $username, $password, $role);
+                $userData = $query->executeQueryWithParams("SELECT * FROM accounts WHERE username = ?", [$username])->fetch_assoc();
+
+                if (!empty($result) && !empty($userData) && isset($userData['id'])) {
+                    $_SESSION['loggedin'] = true;
+                    $_SESSION['id'] = $userData['id'];
+                    $_SESSION['name'] = $name;
+                    $_SESSION['number'] = $number;
+                    $_SESSION['email'] = $email;
+                    $_SESSION['username'] = $username;
+                    $_SESSION['role'] = $role;
+
+                    setcookie('username', $username, time() + (86400 * 30), "/", "", true, true);
+                    setcookie('session_token',  session_id(), time() + (86400 * 30), "/", "", true, true);
+
+                    $msg = [
+                        "title" => "Success!",
+                        "text" => "Registration completed!",
+                        "icon" => "success"
+                    ];
+
+                    if ($role === 'admin') {
+                        header("Location: ../admin/");
+                        exit;
+                    } else if ($role === 'seller') {
+                        header("Location: ../seller/");
+                        exit;
+                    } else {
+                        header("Location: ../");
+                        exit;
+                    }
+                } else {
+                    $msg = [
+                        "title" => "Error!",
+                        "text" => "An error occurred while saving the data."
+                    ];
+                }
+            }
         }
     }
 }
@@ -154,6 +184,9 @@ if (isset($_POST['submit'])) {
         <h2>Sign Up</h2>
 
         <form method="post" action="" enctype="multipart/form-data" id="signup-form">
+            <!-- Add CSRF Token -->
+            <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($_SESSION['csrf_token'], ENT_QUOTES, 'UTF-8'); ?>">
+            
             <div class="form-group">
                 <label for="name">Full Name</label>
                 <input type="text" name="name" placeholder="Full Name" required maxlength="30">
@@ -195,6 +228,16 @@ if (isset($_POST['submit'])) {
                             class="fas fa-eye"></i></button>
                 </div>
             </div>
+            
+            <div class="form-group">
+                <label for="confirm_password">Confirm Password</label>
+                <div class="password-container">
+                    <input type="password" id="confirm_password" name="confirm_password" required maxlength="255">
+                    <button type="button" id="toggle-confirm-password" class="password-toggle"><i
+                            class="fas fa-eye"></i></button>
+                </div>
+                <p class="error-message" id="password-match-error"></p>
+            </div>
 
             <div class="form-group">
                 <input type="submit" name="submit" id="submit" value="Submit">
@@ -227,8 +270,36 @@ if (isset($_POST['submit'])) {
                 toggleIcon.classList.add('fa-eye');
             }
         });
+        
+        document.getElementById('toggle-confirm-password').addEventListener('click', function() {
+            const passwordField = document.getElementById('confirm_password');
+            const toggleIcon = this.querySelector('i');
+
+            if (passwordField.type === 'password') {
+                passwordField.type = 'text';
+                toggleIcon.classList.remove('fa-eye');
+                toggleIcon.classList.add('fa-eye-slash');
+            } else {
+                passwordField.type = 'password';
+                toggleIcon.classList.remove('fa-eye-slash');
+                toggleIcon.classList.add('fa-eye');
+            }
+        });
 
         $(document).ready(function() {
+            // Password match validation
+            $('#password, #confirm_password').on('keyup', function() {
+                if ($('#password').val() !== '' && $('#confirm_password').val() !== '') {
+                    if ($('#password').val() === $('#confirm_password').val()) {
+                        $('#password-match-error').text('');
+                        $('#submit').prop('disabled', false);
+                    } else {
+                        $('#password-match-error').text('Passwords do not match');
+                        $('#submit').prop('disabled', true);
+                    }
+                }
+            });
+            
             $('input[name="number"]').on('input', function() {
                 var number = $(this).val();
                 if (number.length > 0 && !/^\d+$/.test(number)) {
