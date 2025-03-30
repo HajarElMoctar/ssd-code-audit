@@ -1,5 +1,6 @@
 <?php
-session_start();
+require_once '../includes/security.php';
+secureSession();
 
 include '../config.php';
 $query = new Database();
@@ -50,41 +51,49 @@ if (isset($_COOKIE['username']) && isset($_COOKIE['session_token'])) {
 
 $error = '';
 
-if (isset($_POST['submit'])) {
-    $username = isset($_POST['username']) ? trim($_POST['username']) : '';
-    $password = isset($_POST['password']) ? trim($_POST['password']) : '';
-
-
-    if ($username && $password) {
-        $user = $query->authenticate($username, $password, 'accounts');
-
-        if ($user) {
-
-            $_SESSION['loggedin'] = true;
-            $_SESSION['id'] = isset($user[0]['id']) ? $user[0]['id'] : null;
-            $_SESSION['name'] = isset($user[0]['name']) ? $user[0]['name'] : null;
-            $_SESSION['number'] = isset($user[0]['number']) ? $user[0]['number'] : null;
-            $_SESSION['email'] = isset($user[0]['email']) ? $user[0]['email'] : null;
-            $_SESSION['username'] = isset($user[0]['username']) ? $user[0]['username'] : null;
-            $_SESSION['role'] = isset($user[0]['role']) ? $user[0]['role'] : 'user';
-
-            setcookie('username', $username, time() + (86400 * 30), "/", "", true, true);
-            setcookie('session_token',  session_id(), time() + (86400 * 30), "/", "", true, true);
-
-            if ($user[0]['role'] == 'admin') {
-                header("Location: ../admin/");
-                exit;
-            } else if ($user[0]['role'] == 'seller') {
-                header("Location: ../seller/");
-            } else {
-                header("Location: ../");
-                exit;
-            }
-        } else {
-            $error = "The login or password is incorrect.";
-        }
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    // Validate CSRF token
+    if (!isset($_POST['csrf_token']) || !validateCSRFToken($_POST['csrf_token'])) {
+        $error = 'Invalid request';
     } else {
-        $error = "Please fill in all the fields.";
+        // Sanitize input
+        $username = sanitizeInput($_POST['username']);
+        $password = $_POST['password'];
+
+        // Check rate limiting
+        if (!checkRateLimit($_SERVER['REMOTE_ADDR'])) {
+            $error = 'Too many login attempts. Please try again later.';
+        } else {
+            // Verify credentials using Database class
+            $result = $query->authenticate($username, $password, 'accounts');
+            
+            if (!empty($result)) {
+                $user = $result[0];
+                $_SESSION['loggedin'] = true;
+                $_SESSION['username'] = $username;
+                $_SESSION['id'] = $user['id'];
+                $_SESSION['role'] = $user['role'];
+                $_SESSION['created'] = time();
+
+                // Set secure cookie
+                $session_token = session_id();
+                setcookie('username', $username, time() + (86400 * 30), '/', '', true, true);
+                setcookie('session_token', $session_token, time() + (86400 * 30), '/', '', true, true);
+
+                if ($user['role'] == 'admin') {
+                    header("Location: ../admin/");
+                    exit;
+                } else if ($user['role'] == 'seller') {
+                    header("Location: ../seller/");
+                    exit;
+                } else {
+                    header("Location: ../");
+                    exit;
+                }
+            } else {
+                $error = 'Invalid username or password';
+            }
+        }
     }
 }
 ?>
@@ -116,7 +125,11 @@ if (isset($_POST['submit'])) {
 <body>
     <div class="form-container">
         <h1>Login</h1>
-        <form method="post" action="">
+        <?php if ($error): ?>
+            <div class="error-message"><?php echo sanitizeOutput($error); ?></div>
+        <?php endif; ?>
+        <form method="POST" action="">
+            <input type="hidden" name="csrf_token" value="<?php echo generateCSRFToken(); ?>">
             <div class="form-group">
                 <label for="username">Username or Email</label>
                 <input type="text" id="username" name="username" required maxlength="255">
