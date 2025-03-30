@@ -8,7 +8,7 @@ class Database
     {
         $servername = "127.0.0.1";
         $username = "root";
-        $password = "Reseiesarah1!";
+        $password = "password";
         $dbname = "marketplace";
 
         $this->conn = new mysqli($servername, $username, $password, $dbname);
