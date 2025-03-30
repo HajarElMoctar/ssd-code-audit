@@ -87,45 +87,115 @@ class Database
 
     public function insert($table, $data)
     {
-        $keys = implode(', ', array_keys($data));
-        $values = "'" . implode("', '", array_values($data)) . "'";
-        $sql = "INSERT INTO $table ($keys) VALUES ($values)";
-        return $this->executeQuery($sql);
+        $columns = array_keys($data);
+        $values = array_values($data);
+        $placeholders = array_fill(0, count($values), '?');
+        
+        $sql = "INSERT INTO " . $table . " (" . implode(', ', $columns) . ") VALUES (" . implode(', ', $placeholders) . ")";
+        
+        $stmt = $this->conn->prepare($sql);
+        if ($stmt === false) {
+            die("ERROR: " . $this->conn->error);
+        }
+        
+        $types = str_repeat('s', count($values));
+        $stmt->bind_param($types, ...$values);
+        
+        $result = $stmt->execute();
+        if ($result === false) {
+            die("ERROR: " . $stmt->error);
+        }
+        
+        $insert_id = $this->conn->insert_id;
+        $stmt->close();
+        
+        return $insert_id;
     }
 
     public function update($table, $data, $condition = "")
     {
-        $set = '';
+        $set_clause = [];
+        $values = [];
+        
         foreach ($data as $key => $value) {
-            $set .= "$key = '$value', ";
+            $set_clause[] = "$key = ?";
+            $values[] = $value;
         }
-        $set = rtrim($set, ', ');
-        $sql = "UPDATE $table SET $set $condition";
-        return $this->executeQuery($sql);
+        
+        $sql = "UPDATE $table SET " . implode(', ', $set_clause);
+        
+        if (!empty($condition)) {
+            $sql .= " $condition";
+        }
+        
+        $stmt = $this->conn->prepare($sql);
+        if ($stmt === false) {
+            die("ERROR: " . $this->conn->error);
+        }
+        
+        $types = str_repeat('s', count($values));
+        $stmt->bind_param($types, ...$values);
+        
+        $result = $stmt->execute();
+        $affected_rows = $stmt->affected_rows;
+        $stmt->close();
+        
+        return $affected_rows;
     }
 
     public function delete($table, $condition = "")
     {
-        $sql = "DELETE FROM $table $condition";
-        return $this->executeQuery($sql);
+        $sql = "DELETE FROM $table";
+        
+        if (!empty($condition)) {
+            $sql .= " $condition";
+        }
+        
+        $stmt = $this->conn->prepare($sql);
+        if ($stmt === false) {
+            die("ERROR: " . $this->conn->error);
+        }
+        
+        $result = $stmt->execute();
+        $affected_rows = $stmt->affected_rows;
+        $stmt->close();
+        
+        return $affected_rows;
     }
     
     public function hashPassword($password)
     {
-        return hash_hmac('sha256', $password, 'iqbolshoh');
+        // Use modern password hashing with cost factor of 12
+        return password_hash($password, PASSWORD_BCRYPT, ['cost' => 12]);
     }
 
     public function authenticate($username, $password, $table)
     {
-        $password_hash = $this->hashPassword($password);
-        
-        $sql = "SELECT * FROM $table WHERE username = ? AND password = ?";
+        $sql = "SELECT * FROM $table WHERE username = ?";
         $stmt = $this->conn->prepare($sql);
-        $stmt->bind_param("ss", $username, $password_hash);
+        $stmt->bind_param("s", $username);
         $stmt->execute();
         $result = $stmt->get_result();
         
-        return $result->fetch_all(MYSQLI_ASSOC);
+        if ($result->num_rows > 0) {
+            $user = $result->fetch_assoc();
+            
+            // Check if using old hash method (for backward compatibility)
+            $old_hash = hash_hmac('sha256', $password, 'iqbolshoh');
+            
+            if ($user['password'] === $old_hash) {
+                // Migrate to new password format
+                $new_hash = $this->hashPassword($password);
+                $this->update($table, ['password' => $new_hash], "WHERE username = '$username'");
+                return [$user];
+            } 
+            // Check with new password hash
+            else if (password_verify($password, $user['password'])) {
+                return [$user];
+            }
+        }
+        
+        return [];
     }
 
     public function registerUser($name, $number, $email, $username, $password, $role)
@@ -300,15 +370,6 @@ class Database
 
     public function lastInsertId($table, $data)
     {
-        $keys = implode(', ', array_keys($data));
-        $values = "'" . implode("', '", array_values($data)) . "'";
-        $sql = "INSERT INTO $table ($keys) VALUES ($values)";
-        $insert_result = $this->executeQuery($sql);
-
-        if ($insert_result) {
-            return $this->conn->insert_id;
-        } else {
-            return false;
-        }
+        return $this->insert($table, $data);
     }
 }
